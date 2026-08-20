@@ -62,24 +62,33 @@ class _MusicAppState extends State<MusicApp> {
     _loadPreferences();
   }
 
-  // Multi-API Search Function
+  // Multi-Source Song Search
   Future<void> searchSongs(String query) async {
     if (query.trim().isEmpty) return;
     setState(() => _isLoading = true);
 
+    final cleanQuery = Uri.encodeComponent(query.trim());
+    final headers = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'application/json',
+    };
+
     final endpoints = [
-      'https://saavn.dev/api/search/songs?query=$query',
-      'https://jiosaavn-api-privatecvc.vercel.app/search/songs?query=$query',
-      'https://saavn.me/search/songs?query=$query',
+      'https://saavn.dev/api/search/songs?query=$cleanQuery',
+      'https://saavn.me/search/songs?query=$cleanQuery',
+      'https://jiosaavn-api-privatecvc.vercel.app/search/songs?query=$cleanQuery',
     ];
 
     bool success = false;
+    String errorMsg = "";
+
     for (String url in endpoints) {
       try {
-        final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 8));
+        final res = await http.get(Uri.parse(url), headers: headers).timeout(const Duration(seconds: 10));
         if (res.statusCode == 200) {
           final data = json.decode(res.body);
           List results = [];
+          
           if (data['data'] != null && data['data']['results'] != null) {
             results = data['data']['results'];
           } else if (data['results'] != null) {
@@ -94,14 +103,19 @@ class _MusicAppState extends State<MusicApp> {
             break;
           }
         }
-      } catch (_) {}
+      } catch (e) {
+        errorMsg = e.toString();
+      }
     }
 
     setState(() => _isLoading = false);
 
     if (!success && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("No songs found or check network connection.")),
+        SnackBar(
+          content: Text(errorMsg.isNotEmpty ? "Error: $errorMsg" : "No songs found for '$query'"),
+          duration: const Duration(seconds: 4),
+        ),
       );
     }
   }
@@ -109,8 +123,17 @@ class _MusicAppState extends State<MusicApp> {
   // Fetch Trending Default Songs
   Future<void> _fetchTrending() async {
     setState(() => _isTrendingLoading = true);
+    final headers = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+      'Accept': 'application/json',
+    };
+
     try {
-      final res = await http.get(Uri.parse('https://saavn.dev/api/search/songs?query=Trending%20Hindi')).timeout(const Duration(seconds: 8));
+      final res = await http.get(
+        Uri.parse('https://saavn.dev/api/search/songs?query=Top%20Hindi'),
+        headers: headers,
+      ).timeout(const Duration(seconds: 8));
+
       if (res.statusCode == 200) {
         final data = json.decode(res.body);
         setState(() {
@@ -121,26 +144,30 @@ class _MusicAppState extends State<MusicApp> {
     setState(() => _isTrendingLoading = false);
   }
 
-  // Play Audio
+  // Play Audio Stream
   void playSong(dynamic song) async {
     try {
       String? downloadUrl;
       if (song['downloadUrl'] is List && (song['downloadUrl'] as List).isNotEmpty) {
         final list = song['downloadUrl'] as List;
         downloadUrl = list.last['url'] ?? list.first['url'];
+      } else if (song['media_url'] != null) {
+        downloadUrl = song['media_url'];
       }
 
       if (downloadUrl != null) {
         setState(() {
-          _currentTitle = song['name'] ?? 'Song';
+          _currentTitle = song['name'] ?? song['title'] ?? 'Song';
           if (song['artists']?['primary'] != null && (song['artists']['primary'] as List).isNotEmpty) {
             _currentArtist = song['artists']['primary'][0]['name'] ?? '';
           } else {
-            _currentArtist = song['primaryArtists'] ?? '';
+            _currentArtist = song['primaryArtists'] ?? song['artist'] ?? '';
           }
 
           if (song['image'] is List && (song['image'] as List).isNotEmpty) {
             _currentImage = (song['image'] as List).last['url'] ?? '';
+          } else if (song['image'] is String) {
+            _currentImage = song['image'];
           }
         });
 
@@ -150,13 +177,13 @@ class _MusicAppState extends State<MusicApp> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Playback error. Trying next...")),
+          const SnackBar(content: Text("Error playing audio stream.")),
         );
       }
     }
   }
 
-  // 1. Trending Screen
+  // 1. Trending Tab
   Widget _buildTrendingPage() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -213,7 +240,7 @@ class _MusicAppState extends State<MusicApp> {
               itemCount: _trendingSongs.length,
               itemBuilder: (context, index) {
                 final song = _trendingSongs[index];
-                final title = song['name'] ?? 'Song';
+                final title = song['name'] ?? song['title'] ?? 'Song';
                 final artist = song['artists']?['primary']?[0]?['name'] ?? song['primaryArtists'] ?? '';
                 final imgUrl = (song['image'] is List && (song['image'] as List).isNotEmpty)
                     ? song['image'][1]['url']
@@ -238,7 +265,7 @@ class _MusicAppState extends State<MusicApp> {
     );
   }
 
-  // 2. Search Screen
+  // 2. Search Tab
   Widget _buildSearchPage() {
     return Column(
       children: [
@@ -250,7 +277,7 @@ class _MusicAppState extends State<MusicApp> {
             textInputAction: TextInputAction.search,
             onSubmitted: (val) => searchSongs(val),
             decoration: InputDecoration(
-              hintText: 'Search songs, albums, artists...',
+              hintText: 'Search songs, artists, albums...',
               hintStyle: const TextStyle(color: Colors.grey),
               filled: true,
               fillColor: const Color(0xFF222222),
@@ -268,7 +295,7 @@ class _MusicAppState extends State<MusicApp> {
         else if (_searchResults.isEmpty)
           const Expanded(
             child: Center(
-              child: Text("Search for your favorite song above 🔍", style: TextStyle(color: Colors.grey)),
+              child: Text("Search for any song above 🔍", style: TextStyle(color: Colors.grey)),
             ),
           )
         else
@@ -277,7 +304,7 @@ class _MusicAppState extends State<MusicApp> {
               itemCount: _searchResults.length,
               itemBuilder: (context, index) {
                 final song = _searchResults[index];
-                final title = song['name'] ?? 'Song';
+                final title = song['name'] ?? song['title'] ?? 'Song';
                 final artist = song['artists']?['primary']?[0]?['name'] ?? song['primaryArtists'] ?? '';
                 final imgUrl = (song['image'] is List && (song['image'] as List).isNotEmpty)
                     ? song['image'][1]['url']
@@ -302,7 +329,7 @@ class _MusicAppState extends State<MusicApp> {
     );
   }
 
-  // 3. Settings Screen
+  // 3. Settings Tab
   Widget _buildSettingsPage() {
     return ListView(
       padding: const EdgeInsets.all(16.0),
@@ -499,38 +526,4 @@ class _MusicAppState extends State<MusicApp> {
                     ),
                   ),
                   IconButton(
-                    icon: Icon(_isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled),
-                    color: Colors.green,
-                    iconSize: 38,
-                    onPressed: () {
-                      if (_isPlaying) {
-                        _audioPlayer.pause();
-                      } else {
-                        _audioPlayer.play();
-                      }
-                    },
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-      bottomNavigationBar: BottomNavigationBar(
-        backgroundColor: Colors.black,
-        selectedItemColor: Colors.green,
-        unselectedItemColor: Colors.grey,
-        currentIndex: _currentIndex,
-        type: BottomNavigationBarType.fixed,
-        onTap: (index) => setState(() => _currentIndex = index),
-        items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.trending_up), label: 'Trending'),
-          BottomNavigationBarItem(icon: Icon(Icons.album), label: 'Albums'),
-          BottomNavigationBarItem(icon: Icon(Icons.playlist_play), label: 'Playlist'),
-          BottomNavigationBarItem(icon: Icon(Icons.search), label: 'Search'),
-          BottomNavigationBarItem(icon: Icon(Icons.settings), label: 'Settings'),
-        ],
-      ),
-    );
-  }
-}
+                    icon: Icon(_isPlaying ? Icons.pause_circle_
