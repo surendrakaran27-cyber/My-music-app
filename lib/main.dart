@@ -18,15 +18,18 @@ class MusicApp extends StatefulWidget {
 class _MusicAppState extends State<MusicApp> {
   int _currentIndex = 0;
   final AudioPlayer _audioPlayer = AudioPlayer();
+  final TextEditingController _searchController = TextEditingController();
 
   // User Profile
-  String _userName = "Music Lover";
-  String _selectedAvatar = "🎧";
+  String _userName = "SURSA KARNOT";
+  String _selectedAvatar = "👑";
   String _audioQuality = "320kbps";
 
-  // Player State
+  // Data State
   List _searchResults = [];
+  List _trendingSongs = [];
   bool _isLoading = false;
+  bool _isTrendingLoading = false;
   String _currentTitle = "No song playing";
   String _currentArtist = "";
   String _currentImage = "";
@@ -36,6 +39,7 @@ class _MusicAppState extends State<MusicApp> {
   void initState() {
     super.initState();
     _loadPreferences();
+    _fetchTrending();
     _audioPlayer.playerStateStream.listen((state) {
       if (mounted) {
         setState(() => _isPlaying = state.playing);
@@ -43,69 +47,120 @@ class _MusicAppState extends State<MusicApp> {
     });
   }
 
-  // Load Saved Profile Data
   Future<void> _loadPreferences() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
-      _userName = prefs.getString('user_name') ?? "Music Lover";
-      _selectedAvatar = prefs.getString('user_avatar') ?? "🎧";
+      _userName = prefs.getString('user_name') ?? "SURSA KARNOT";
+      _selectedAvatar = prefs.getString('user_avatar') ?? "👑";
       _audioQuality = prefs.getString('audio_quality') ?? "320kbps";
     });
   }
 
-  // Save Profile Data
   Future<void> _savePreference(String key, String value) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(key, value);
     _loadPreferences();
   }
 
-  // Saavn API Call
+  // Multi-API Search Function
   Future<void> searchSongs(String query) async {
     if (query.trim().isEmpty) return;
     setState(() => _isLoading = true);
 
-    final url = Uri.parse('https://saavn.dev/api/search/songs?query=$query');
+    final endpoints = [
+      'https://saavn.dev/api/search/songs?query=$query',
+      'https://jiosaavn-api-privatecvc.vercel.app/search/songs?query=$query',
+      'https://saavn.me/search/songs?query=$query',
+    ];
+
+    bool success = false;
+    for (String url in endpoints) {
+      try {
+        final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 8));
+        if (res.statusCode == 200) {
+          final data = json.decode(res.body);
+          List results = [];
+          if (data['data'] != null && data['data']['results'] != null) {
+            results = data['data']['results'];
+          } else if (data['results'] != null) {
+            results = data['results'];
+          }
+
+          if (results.isNotEmpty) {
+            setState(() {
+              _searchResults = results;
+              success = true;
+            });
+            break;
+          }
+        }
+      } catch (_) {}
+    }
+
+    setState(() => _isLoading = false);
+
+    if (!success && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("No songs found or check network connection.")),
+      );
+    }
+  }
+
+  // Fetch Trending Default Songs
+  Future<void> _fetchTrending() async {
+    setState(() => _isTrendingLoading = true);
     try {
-      final res = await http.get(url);
+      final res = await http.get(Uri.parse('https://saavn.dev/api/search/songs?query=Trending%20Hindi')).timeout(const Duration(seconds: 8));
       if (res.statusCode == 200) {
         final data = json.decode(res.body);
         setState(() {
-          _searchResults = data['data']?['results'] ?? [];
+          _trendingSongs = data['data']?['results'] ?? [];
         });
       }
-    } catch (e) {
-      debugPrint("API Error: $e");
-    } finally {
-      setState(() => _isLoading = false);
-    }
+    } catch (_) {}
+    setState(() => _isTrendingLoading = false);
   }
 
   // Play Audio
   void playSong(dynamic song) async {
     try {
-      final downloadUrl = song['downloadUrl']?[4]?['url'] ??
-          song['downloadUrl']?[0]?['url'];
+      String? downloadUrl;
+      if (song['downloadUrl'] is List && (song['downloadUrl'] as List).isNotEmpty) {
+        final list = song['downloadUrl'] as List;
+        downloadUrl = list.last['url'] ?? list.first['url'];
+      }
+
       if (downloadUrl != null) {
         setState(() {
-          _currentTitle = song['name'] ?? 'Unknown';
-          _currentArtist = song['artists']?['primary']?[0]?['name'] ?? '';
-          _currentImage = song['image']?[2]?['url'] ?? '';
+          _currentTitle = song['name'] ?? 'Song';
+          if (song['artists']?['primary'] != null && (song['artists']['primary'] as List).isNotEmpty) {
+            _currentArtist = song['artists']['primary'][0]['name'] ?? '';
+          } else {
+            _currentArtist = song['primaryArtists'] ?? '';
+          }
+
+          if (song['image'] is List && (song['image'] as List).isNotEmpty) {
+            _currentImage = (song['image'] as List).last['url'] ?? '';
+          }
         });
+
         await _audioPlayer.setUrl(downloadUrl);
         _audioPlayer.play();
       }
     } catch (e) {
-      debugPrint("Play Error: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Playback error. Trying next...")),
+        );
+      }
     }
   }
 
-  // 1. Trending Tab (Header with Avatar & Name)
+  // 1. Trending Screen
   Widget _buildTrendingPage() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Top Header
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           decoration: const BoxDecoration(
@@ -118,7 +173,7 @@ class _MusicAppState extends State<MusicApp> {
           child: Row(
             children: [
               GestureDetector(
-                onTap: () => setState(() => _currentIndex = 4), // Go to Settings
+                onTap: () => setState(() => _currentIndex = 4),
                 child: CircleAvatar(
                   radius: 24,
                   backgroundColor: Colors.green.withOpacity(0.2),
@@ -129,17 +184,10 @@ class _MusicAppState extends State<MusicApp> {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    "Welcome back,",
-                    style: TextStyle(color: Colors.grey, fontSize: 13),
-                  ),
+                  const Text("Welcome back,", style: TextStyle(color: Colors.grey, fontSize: 13)),
                   Text(
                     _userName,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                    ),
+                    style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
                   ),
                 ],
               ),
@@ -151,59 +199,25 @@ class _MusicAppState extends State<MusicApp> {
             ],
           ),
         ),
-        const SizedBox(height: 20),
+        const SizedBox(height: 16),
         const Padding(
           padding: EdgeInsets.symmetric(horizontal: 16.0),
-          child: Text(
-            "🔥 Trending Today",
-            style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold),
-          ),
+          child: Text("🔥 Trending Today", style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
         ),
-        const Expanded(
-          child: Center(
-            child: Text(
-              "Go to Search tab to play any song!",
-              style: TextStyle(color: Colors.grey),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  // 2. Search Tab
-  Widget _buildSearchPage() {
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.all(12.0),
-          child: TextField(
-            style: const TextStyle(color: Colors.white),
-            onSubmitted: (val) => searchSongs(val),
-            decoration: InputDecoration(
-              hintText: 'Search songs, albums, artists...',
-              hintStyle: const TextStyle(color: Colors.grey),
-              filled: true,
-              fillColor: const Color(0xFF222222),
-              prefixIcon: const Icon(Icons.search, color: Colors.green),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide.none,
-              ),
-            ),
-          ),
-        ),
-        if (_isLoading)
+        const SizedBox(height: 8),
+        if (_isTrendingLoading)
           const Expanded(child: Center(child: CircularProgressIndicator(color: Colors.green)))
         else
           Expanded(
             child: ListView.builder(
-              itemCount: _searchResults.length,
+              itemCount: _trendingSongs.length,
               itemBuilder: (context, index) {
-                final song = _searchResults[index];
+                final song = _trendingSongs[index];
                 final title = song['name'] ?? 'Song';
-                final artist = song['artists']?['primary']?[0]?['name'] ?? '';
-                final imgUrl = song['image']?[1]?['url'] ?? '';
+                final artist = song['artists']?['primary']?[0]?['name'] ?? song['primaryArtists'] ?? '';
+                final imgUrl = (song['image'] is List && (song['image'] as List).isNotEmpty)
+                    ? song['image'][1]['url']
+                    : '';
 
                 return ListTile(
                   leading: imgUrl.isNotEmpty
@@ -224,12 +238,75 @@ class _MusicAppState extends State<MusicApp> {
     );
   }
 
-  // 3. Settings Tab
+  // 2. Search Screen
+  Widget _buildSearchPage() {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(12.0),
+          child: TextField(
+            controller: _searchController,
+            style: const TextStyle(color: Colors.white),
+            textInputAction: TextInputAction.search,
+            onSubmitted: (val) => searchSongs(val),
+            decoration: InputDecoration(
+              hintText: 'Search songs, albums, artists...',
+              hintStyle: const TextStyle(color: Colors.grey),
+              filled: true,
+              fillColor: const Color(0xFF222222),
+              prefixIcon: const Icon(Icons.search, color: Colors.green),
+              suffixIcon: IconButton(
+                icon: const Icon(Icons.arrow_forward, color: Colors.green),
+                onPressed: () => searchSongs(_searchController.text),
+              ),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+            ),
+          ),
+        ),
+        if (_isLoading)
+          const Expanded(child: Center(child: CircularProgressIndicator(color: Colors.green)))
+        else if (_searchResults.isEmpty)
+          const Expanded(
+            child: Center(
+              child: Text("Search for your favorite song above 🔍", style: TextStyle(color: Colors.grey)),
+            ),
+          )
+        else
+          Expanded(
+            child: ListView.builder(
+              itemCount: _searchResults.length,
+              itemBuilder: (context, index) {
+                final song = _searchResults[index];
+                final title = song['name'] ?? 'Song';
+                final artist = song['artists']?['primary']?[0]?['name'] ?? song['primaryArtists'] ?? '';
+                final imgUrl = (song['image'] is List && (song['image'] as List).isNotEmpty)
+                    ? song['image'][1]['url']
+                    : '';
+
+                return ListTile(
+                  leading: imgUrl.isNotEmpty
+                      ? ClipRRect(
+                          borderRadius: BorderRadius.circular(6),
+                          child: Image.network(imgUrl, width: 48, height: 48, fit: BoxFit.cover),
+                        )
+                      : const Icon(Icons.music_note, color: Colors.white),
+                  title: Text(title, style: const TextStyle(color: Colors.white), maxLines: 1),
+                  subtitle: Text(artist, style: const TextStyle(color: Colors.grey), maxLines: 1),
+                  trailing: const Icon(Icons.play_circle_fill, color: Colors.green, size: 36),
+                  onTap: () => playSong(song),
+                );
+              },
+            ),
+          ),
+      ],
+    );
+  }
+
+  // 3. Settings Screen
   Widget _buildSettingsPage() {
     return ListView(
       padding: const EdgeInsets.all(16.0),
       children: [
-        // Profile Card
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
@@ -261,8 +338,6 @@ class _MusicAppState extends State<MusicApp> {
           ),
         ),
         const SizedBox(height: 20),
-
-        // Audio Quality
         ListTile(
           tileColor: const Color(0xFF1E1E1E),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -284,14 +359,12 @@ class _MusicAppState extends State<MusicApp> {
           ),
         ),
         const SizedBox(height: 12),
-
-        // Clear Cache
         ListTile(
           tileColor: const Color(0xFF1E1E1E),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           leading: const Icon(Icons.cleaning_services, color: Colors.green),
           title: const Text("Clear Cache", style: TextStyle(color: Colors.white)),
-          subtitle: const Text("Clean temporary app storage", style: TextStyle(color: Colors.grey)),
+          subtitle: const Text("Clean temporary storage", style: TextStyle(color: Colors.grey)),
           trailing: const Icon(Icons.arrow_forward_ios, color: Colors.grey, size: 16),
           onTap: () {
             ScaffoldMessenger.of(context).showSnackBar(
@@ -300,8 +373,6 @@ class _MusicAppState extends State<MusicApp> {
           },
         ),
         const SizedBox(height: 12),
-
-        // App Version
         ListTile(
           tileColor: const Color(0xFF1E1E1E),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -313,10 +384,9 @@ class _MusicAppState extends State<MusicApp> {
     );
   }
 
-  // Edit Profile Dialog
   void _showEditProfileDialog() {
     final nameController = TextEditingController(text: _userName);
-    final avatars = ["🎧", "🎸", "🎤", "🎵", "🦁", "👑", "🔥", "🚀"];
+    final avatars = ["👑", "🎧", "🎸", "🎤", "🎵", "🦁", "🔥", "🚀"];
 
     showDialog(
       context: context,
