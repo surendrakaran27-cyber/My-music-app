@@ -526,4 +526,38 @@ class _MusicAppState extends State<MusicApp> {
                     ),
                   ),
                   IconButton(
-                    icon: Icon(_isPlaying ? Icons.pause_circle_
+                    icon: Icon(_isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled),
+                    color: Colors.green,
+                    iconSize: 38,
+                    onPressed: () {
+                      if (_isPlaying) {
+                        _audioPlayer.pause();
+                      } else {
+                        _audioPlayer.play();
+                      }
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+      bottomNavigationBar: BottomNavigationBar(
+        backgroundColor: Colors.black,
+        selectedItemColor: Colors.green,
+        unselectedItemColor: Colors.grey,
+        currentIndex: _currentIndex,
+        type: BottomNavigationBarType.fixed,
+        onTap: (index) => setState(() => _currentIndex = index),
+        items: const [
+          BottomNavigationBarItem(icon: Icon(Icons.trending_up), label: 'Trending'),
+          BottomNavigationBarItem(icon: Icon(Icons.album), label: 'Albums'),
+          BottomNavigationBarItem(icon: Icon(Icons.playlist_play), label: 'Playlist'),
+          BottomNavigationBarItem(icon: Icon(Icons.search), label: 'Search'),
+          BottomNavigationBarItem(icon: Icon(Icons.settings), label: 'Settings'),
+        ],
+      ),
+    );
+  }
+}
