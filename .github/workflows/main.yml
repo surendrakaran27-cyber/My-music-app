@@ -29,7 +29,16 @@ jobs:
 
       - name: Add Internet Permission
         run: |
-          sed -i '/<application/i <uses-permission android:name="android.permission.INTERNET"/>' android/app/src/main/AndroidManifest.xml
+          python3 -c "
+          path = 'android/app/src/main/AndroidManifest.xml'
+          with open(path, 'r') as f:
+              data = f.read()
+          perms = '<uses-permission android:name=\"android.permission.INTERNET\"/>\n    <uses-permission android:name=\"android.permission.ACCESS_NETWORK_STATE\"/>\n'
+          if '<application' in data:
+              data = data.replace('<application', perms + '    <application')
+          with open(path, 'w') as f:
+              f.write(data)
+          "
 
       - name: Install Dependencies
         run: flutter pub get
