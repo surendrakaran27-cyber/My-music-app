@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
 import 'package:just_audio/just_audio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 
 void main() => runApp(const MaterialApp(
       home: MusicApp(),
@@ -18,16 +17,17 @@ class MusicApp extends StatefulWidget {
 class _MusicAppState extends State<MusicApp> {
   int _currentIndex = 0;
   final AudioPlayer _audioPlayer = AudioPlayer();
+  final YoutubeExplode _yt = YoutubeExplode();
   final TextEditingController _searchController = TextEditingController();
 
   // User Profile
   String _userName = "SURSA KARNOT";
   String _selectedAvatar = "👑";
-  String _audioQuality = "320kbps";
+  String _audioQuality = "High Quality";
 
-  // Data State
-  List _searchResults = [];
-  List _trendingSongs = [];
+  // State Variables
+  List<Video> _searchResults = [];
+  List<Video> _trendingSongs = [];
   bool _isLoading = false;
   bool _isTrendingLoading = false;
   String _currentTitle = "No song playing";
@@ -47,12 +47,19 @@ class _MusicAppState extends State<MusicApp> {
     });
   }
 
+  @override
+  void dispose() {
+    _audioPlayer.dispose();
+    _yt.close();
+    super.dispose();
+  }
+
   Future<void> _loadPreferences() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
       _userName = prefs.getString('user_name') ?? "SURSA KARNOT";
       _selectedAvatar = prefs.getString('user_avatar') ?? "👑";
-      _audioQuality = prefs.getString('audio_quality') ?? "320kbps";
+      _audioQuality = prefs.getString('audio_quality') ?? "High Quality";
     });
   }
 
@@ -62,128 +69,63 @@ class _MusicAppState extends State<MusicApp> {
     _loadPreferences();
   }
 
-  // Multi-Source Song Search
+  // Live YouTube Search
   Future<void> searchSongs(String query) async {
     if (query.trim().isEmpty) return;
     setState(() => _isLoading = true);
 
-    final cleanQuery = Uri.encodeComponent(query.trim());
-    final headers = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept': 'application/json',
-    };
-
-    final endpoints = [
-      'https://saavn.dev/api/search/songs?query=$cleanQuery',
-      'https://saavn.me/search/songs?query=$cleanQuery',
-      'https://jiosaavn-api-privatecvc.vercel.app/search/songs?query=$cleanQuery',
-    ];
-
-    bool success = false;
-    String errorMsg = "";
-
-    for (String url in endpoints) {
-      try {
-        final res = await http.get(Uri.parse(url), headers: headers).timeout(const Duration(seconds: 10));
-        if (res.statusCode == 200) {
-          final data = json.decode(res.body);
-          List results = [];
-          
-          if (data['data'] != null && data['data']['results'] != null) {
-            results = data['data']['results'];
-          } else if (data['results'] != null) {
-            results = data['results'];
-          }
-
-          if (results.isNotEmpty) {
-            setState(() {
-              _searchResults = results;
-              success = true;
-            });
-            break;
-          }
-        }
-      } catch (e) {
-        errorMsg = e.toString();
+    try {
+      final searchList = await _yt.search.search(query.trim());
+      setState(() {
+        _searchResults = searchList.toList();
+      });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Search error: $e")),
+        );
       }
-    }
-
-    setState(() => _isLoading = false);
-
-    if (!success && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(errorMsg.isNotEmpty ? "Error: $errorMsg" : "No songs found for '$query'"),
-          duration: const Duration(seconds: 4),
-        ),
-      );
+    } finally {
+      setState(() => _isLoading = false);
     }
   }
 
-  // Fetch Trending Default Songs
+  // Default Trending Songs
   Future<void> _fetchTrending() async {
     setState(() => _isTrendingLoading = true);
-    final headers = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-      'Accept': 'application/json',
-    };
-
     try {
-      final res = await http.get(
-        Uri.parse('https://saavn.dev/api/search/songs?query=Top%20Hindi'),
-        headers: headers,
-      ).timeout(const Duration(seconds: 8));
-
-      if (res.statusCode == 200) {
-        final data = json.decode(res.body);
-        setState(() {
-          _trendingSongs = data['data']?['results'] ?? [];
-        });
-      }
+      final list = await _yt.search.search("Latest Hindi Trending Songs 2026");
+      setState(() {
+        _trendingSongs = list.take(15).toList();
+      });
     } catch (_) {}
     setState(() => _isTrendingLoading = false);
   }
 
-  // Play Audio Stream
-  void playSong(dynamic song) async {
+  // Play Audio Stream Directly (MP3/M4A)
+  void playVideo(Video video) async {
     try {
-      String? downloadUrl;
-      if (song['downloadUrl'] is List && (song['downloadUrl'] as List).isNotEmpty) {
-        final list = song['downloadUrl'] as List;
-        downloadUrl = list.last['url'] ?? list.first['url'];
-      } else if (song['media_url'] != null) {
-        downloadUrl = song['media_url'];
-      }
+      setState(() {
+        _currentTitle = video.title;
+        _currentArtist = video.author;
+        _currentImage = video.thumbnails.highResUrl;
+      });
 
-      if (downloadUrl != null) {
-        setState(() {
-          _currentTitle = song['name'] ?? song['title'] ?? 'Song';
-          if (song['artists']?['primary'] != null && (song['artists']['primary'] as List).isNotEmpty) {
-            _currentArtist = song['artists']['primary'][0]['name'] ?? '';
-          } else {
-            _currentArtist = song['primaryArtists'] ?? song['artist'] ?? '';
-          }
+      final manifest = await _yt.videos.streamsClient.getManifest(video.id);
+      final audioStream = manifest.audioOnly.withHighestBitrate();
 
-          if (song['image'] is List && (song['image'] as List).isNotEmpty) {
-            _currentImage = (song['image'] as List).last['url'] ?? '';
-          } else if (song['image'] is String) {
-            _currentImage = song['image'];
-          }
-        });
-
-        await _audioPlayer.setUrl(downloadUrl);
-        _audioPlayer.play();
-      }
+      await _audioPlayer.setUrl(audioStream.url.toString());
+      _audioPlayer.play();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Error playing audio stream.")),
+          const SnackBar(content: Text("Error playing this track")),
         );
       }
     }
   }
 
-  // 1. Trending Tab
+  // 1. Trending Screen
   Widget _buildTrendingPage() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -229,7 +171,7 @@ class _MusicAppState extends State<MusicApp> {
         const SizedBox(height: 16),
         const Padding(
           padding: EdgeInsets.symmetric(horizontal: 16.0),
-          child: Text("🔥 Trending Today", style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+          child: Text("🔥 Trending Tracks", style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
         ),
         const SizedBox(height: 8),
         if (_isTrendingLoading)
@@ -239,24 +181,22 @@ class _MusicAppState extends State<MusicApp> {
             child: ListView.builder(
               itemCount: _trendingSongs.length,
               itemBuilder: (context, index) {
-                final song = _trendingSongs[index];
-                final title = song['name'] ?? song['title'] ?? 'Song';
-                final artist = song['artists']?['primary']?[0]?['name'] ?? song['primaryArtists'] ?? '';
-                final imgUrl = (song['image'] is List && (song['image'] as List).isNotEmpty)
-                    ? song['image'][1]['url']
-                    : '';
-
+                final video = _trendingSongs[index];
                 return ListTile(
-                  leading: imgUrl.isNotEmpty
-                      ? ClipRRect(
-                          borderRadius: BorderRadius.circular(6),
-                          child: Image.network(imgUrl, width: 48, height: 48, fit: BoxFit.cover),
-                        )
-                      : const Icon(Icons.music_note, color: Colors.white),
-                  title: Text(title, style: const TextStyle(color: Colors.white), maxLines: 1),
-                  subtitle: Text(artist, style: const TextStyle(color: Colors.grey), maxLines: 1),
+                  leading: ClipRRect(
+                    borderRadius: BorderRadius.circular(6),
+                    child: Image.network(
+                      video.thumbnails.lowResUrl,
+                      width: 50,
+                      height: 50,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => const Icon(Icons.music_note, color: Colors.green),
+                    ),
+                  ),
+                  title: Text(video.title, style: const TextStyle(color: Colors.white), maxLines: 1),
+                  subtitle: Text(video.author, style: const TextStyle(color: Colors.grey), maxLines: 1),
                   trailing: const Icon(Icons.play_circle_fill, color: Colors.green, size: 36),
-                  onTap: () => playSong(song),
+                  onTap: () => playVideo(video),
                 );
               },
             ),
@@ -265,7 +205,7 @@ class _MusicAppState extends State<MusicApp> {
     );
   }
 
-  // 2. Search Tab
+  // 2. Search Screen
   Widget _buildSearchPage() {
     return Column(
       children: [
@@ -277,7 +217,7 @@ class _MusicAppState extends State<MusicApp> {
             textInputAction: TextInputAction.search,
             onSubmitted: (val) => searchSongs(val),
             decoration: InputDecoration(
-              hintText: 'Search songs, artists, albums...',
+              hintText: 'Search any song, remix, artist...',
               hintStyle: const TextStyle(color: Colors.grey),
               filled: true,
               fillColor: const Color(0xFF222222),
@@ -295,7 +235,7 @@ class _MusicAppState extends State<MusicApp> {
         else if (_searchResults.isEmpty)
           const Expanded(
             child: Center(
-              child: Text("Search for any song above 🔍", style: TextStyle(color: Colors.grey)),
+              child: Text("Search for your favorite song above 🔍", style: TextStyle(color: Colors.grey)),
             ),
           )
         else
@@ -303,24 +243,22 @@ class _MusicAppState extends State<MusicApp> {
             child: ListView.builder(
               itemCount: _searchResults.length,
               itemBuilder: (context, index) {
-                final song = _searchResults[index];
-                final title = song['name'] ?? song['title'] ?? 'Song';
-                final artist = song['artists']?['primary']?[0]?['name'] ?? song['primaryArtists'] ?? '';
-                final imgUrl = (song['image'] is List && (song['image'] as List).isNotEmpty)
-                    ? song['image'][1]['url']
-                    : '';
-
+                final video = _searchResults[index];
                 return ListTile(
-                  leading: imgUrl.isNotEmpty
-                      ? ClipRRect(
-                          borderRadius: BorderRadius.circular(6),
-                          child: Image.network(imgUrl, width: 48, height: 48, fit: BoxFit.cover),
-                        )
-                      : const Icon(Icons.music_note, color: Colors.white),
-                  title: Text(title, style: const TextStyle(color: Colors.white), maxLines: 1),
-                  subtitle: Text(artist, style: const TextStyle(color: Colors.grey), maxLines: 1),
+                  leading: ClipRRect(
+                    borderRadius: BorderRadius.circular(6),
+                    child: Image.network(
+                      video.thumbnails.lowResUrl,
+                      width: 50,
+                      height: 50,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => const Icon(Icons.music_note, color: Colors.green),
+                    ),
+                  ),
+                  title: Text(video.title, style: const TextStyle(color: Colors.white), maxLines: 1),
+                  subtitle: Text(video.author, style: const TextStyle(color: Colors.grey), maxLines: 1),
                   trailing: const Icon(Icons.play_circle_fill, color: Colors.green, size: 36),
-                  onTap: () => playSong(song),
+                  onTap: () => playVideo(video),
                 );
               },
             ),
@@ -329,7 +267,7 @@ class _MusicAppState extends State<MusicApp> {
     );
   }
 
-  // 3. Settings Tab
+  // 3. Settings Screen
   Widget _buildSettingsPage() {
     return ListView(
       padding: const EdgeInsets.all(16.0),
@@ -369,21 +307,8 @@ class _MusicAppState extends State<MusicApp> {
           tileColor: const Color(0xFF1E1E1E),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           leading: const Icon(Icons.high_quality, color: Colors.green),
-          title: const Text("Audio Streaming Quality", style: TextStyle(color: Colors.white)),
-          subtitle: Text(_audioQuality, style: const TextStyle(color: Colors.grey)),
-          trailing: DropdownButton<String>(
-            dropdownColor: const Color(0xFF2A2A2A),
-            value: _audioQuality,
-            underline: const SizedBox(),
-            items: const [
-              DropdownMenuItem(value: "96kbps", child: Text("Low (96 kbps)", style: TextStyle(color: Colors.white))),
-              DropdownMenuItem(value: "160kbps", child: Text("Normal (160 kbps)", style: TextStyle(color: Colors.white))),
-              DropdownMenuItem(value: "320kbps", child: Text("High (320 kbps)", style: TextStyle(color: Colors.white))),
-            ],
-            onChanged: (val) {
-              if (val != null) _savePreference('audio_quality', val);
-            },
-          ),
+          title: const Text("Audio Engine", style: TextStyle(color: Colors.white)),
+          subtitle: const Text("YouTube Direct Stream Engine", style: TextStyle(color: Colors.grey)),
         ),
         const SizedBox(height: 12),
         ListTile(
@@ -405,7 +330,7 @@ class _MusicAppState extends State<MusicApp> {
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           leading: const Icon(Icons.info_outline, color: Colors.green),
           title: const Text("App Version", style: TextStyle(color: Colors.white)),
-          subtitle: const Text("v1.0.0 (Release)", style: TextStyle(color: Colors.grey)),
+          subtitle: const Text("v1.1.0 (YouTube Native)", style: TextStyle(color: Colors.grey)),
         ),
       ],
     );
