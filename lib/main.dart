@@ -25,7 +25,7 @@ class _MusicAppState extends State<MusicApp> {
   String _selectedAvatar = "👑";
   String _audioQuality = "High (320kbps)";
 
-  // App & Song State
+  // Song & Player State
   List<Video> _searchResults = [];
   List<Video> _trendingSongs = [];
   bool _isLoading = false;
@@ -114,7 +114,7 @@ class _MusicAppState extends State<MusicApp> {
     setState(() => _isTrendingLoading = false);
   }
 
-  // Audio Player Engine
+  // Play Audio Stream with YouTube User-Agent Bypass
   void playVideo(Video video) async {
     try {
       setState(() {
@@ -129,7 +129,16 @@ class _MusicAppState extends State<MusicApp> {
           ? audioStreams.withHighestBitrate()
           : manifest.muxed.withHighestBitrate();
 
-      await _audioPlayer.setUrl(selectedStream.url.toString());
+      // Fix for (0) Source error: Passing User-Agent headers directly to ExoPlayer
+      await _audioPlayer.setAudioSource(
+        AudioSource.uri(
+          Uri.parse(selectedStream.url.toString()),
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.230 Mobile Safari/537.36',
+          },
+        ),
+      );
+
       _audioPlayer.play();
     } catch (e) {
       if (mounted) {
@@ -147,7 +156,7 @@ class _MusicAppState extends State<MusicApp> {
     return "$minutes:$seconds";
   }
 
-  // Full Spotify-like Player Screen (Bottom Sheet)
+  // Full-Screen Spotify Player Screen (Bottom Sheet)
   void _showFullPlayer() {
     if (_currentImage.isEmpty) return;
 
@@ -169,7 +178,6 @@ class _MusicAppState extends State<MusicApp> {
                 padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
                 child: Column(
                   children: [
-                    // Pull down bar
                     Container(
                       width: 40,
                       height: 5,
@@ -186,12 +194,11 @@ class _MusicAppState extends State<MusicApp> {
                           icon: const Icon(Icons.keyboard_arrow_down, color: Colors.white, size: 30),
                           onPressed: () => Navigator.pop(context),
                         ),
-                        const Text("PLAYING FROM YOUR APP", style: TextStyle(color: Colors.grey, fontSize: 11, letterSpacing: 1.2)),
+                        const Text("NOW PLAYING", style: TextStyle(color: Colors.grey, fontSize: 11, letterSpacing: 1.2)),
                         const Icon(Icons.more_vert, color: Colors.white),
                       ],
                     ),
                     const Spacer(),
-                    // Album Poster
                     ClipRRect(
                       borderRadius: BorderRadius.circular(16),
                       child: Image.network(
@@ -208,7 +215,6 @@ class _MusicAppState extends State<MusicApp> {
                       ),
                     ),
                     const Spacer(),
-                    // Title & Artist
                     Align(
                       alignment: Alignment.centerLeft,
                       child: Text(
@@ -228,7 +234,7 @@ class _MusicAppState extends State<MusicApp> {
                       ),
                     ),
                     const SizedBox(height: 20),
-                    // Progress Slider
+                    // Timeline Slider
                     SliderTheme(
                       data: SliderTheme.of(context).copyWith(
                         thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
@@ -257,7 +263,7 @@ class _MusicAppState extends State<MusicApp> {
                       ),
                     ),
                     const SizedBox(height: 16),
-                    // Playback Controls
+                    // Controls
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                       children: [
