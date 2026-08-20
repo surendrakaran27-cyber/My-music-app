@@ -20,30 +20,41 @@ class _MusicAppState extends State<MusicApp> {
   final YoutubeExplode _yt = YoutubeExplode();
   final TextEditingController _searchController = TextEditingController();
 
-  // User Profile
+  // User Profile Data
   String _userName = "SURSA KARNOT";
   String _selectedAvatar = "👑";
-  String _audioQuality = "High Quality";
+  String _audioQuality = "High (320kbps)";
 
-  // State Variables
+  // App & Song State
   List<Video> _searchResults = [];
   List<Video> _trendingSongs = [];
   bool _isLoading = false;
   bool _isTrendingLoading = false;
+  
   String _currentTitle = "No song playing";
   String _currentArtist = "";
   String _currentImage = "";
   bool _isPlaying = false;
+  Duration _duration = Duration.zero;
+  Duration _position = Duration.zero;
 
   @override
   void initState() {
     super.initState();
     _loadPreferences();
     _fetchTrending();
+
+    // Listen to playback state
     _audioPlayer.playerStateStream.listen((state) {
-      if (mounted) {
-        setState(() => _isPlaying = state.playing);
-      }
+      if (mounted) setState(() => _isPlaying = state.playing);
+    });
+
+    // Listen to duration & position for full player seekbar
+    _audioPlayer.durationStream.listen((d) {
+      if (mounted && d != null) setState(() => _duration = d);
+    });
+    _audioPlayer.positionStream.listen((p) {
+      if (mounted) setState(() => _position = p);
     });
   }
 
@@ -51,6 +62,7 @@ class _MusicAppState extends State<MusicApp> {
   void dispose() {
     _audioPlayer.dispose();
     _yt.close();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -59,7 +71,7 @@ class _MusicAppState extends State<MusicApp> {
     setState(() {
       _userName = prefs.getString('user_name') ?? "SURSA KARNOT";
       _selectedAvatar = prefs.getString('user_avatar') ?? "👑";
-      _audioQuality = prefs.getString('audio_quality') ?? "High Quality";
+      _audioQuality = prefs.getString('audio_quality') ?? "High (320kbps)";
     });
   }
 
@@ -69,7 +81,7 @@ class _MusicAppState extends State<MusicApp> {
     _loadPreferences();
   }
 
-  // Live YouTube Search
+  // Search Engine
   Future<void> searchSongs(String query) async {
     if (query.trim().isEmpty) return;
     setState(() => _isLoading = true);
@@ -90,19 +102,19 @@ class _MusicAppState extends State<MusicApp> {
     }
   }
 
-  // Default Trending Songs
+  // Trending Engine
   Future<void> _fetchTrending() async {
     setState(() => _isTrendingLoading = true);
     try {
-      final list = await _yt.search.search("Latest Hindi Trending Songs 2026");
+      final list = await _yt.search.search("Latest Hindi Songs 2026");
       setState(() {
-        _trendingSongs = list.take(15).toList();
+        _trendingSongs = list.take(20).toList();
       });
     } catch (_) {}
     setState(() => _isTrendingLoading = false);
   }
 
-  // Play Audio Stream Directly (MP3/M4A)
+  // Audio Player Engine
   void playVideo(Video video) async {
     try {
       setState(() {
@@ -112,20 +124,182 @@ class _MusicAppState extends State<MusicApp> {
       });
 
       final manifest = await _yt.videos.streamsClient.getManifest(video.id);
-      final audioStream = manifest.audioOnly.withHighestBitrate();
+      final audioStreams = manifest.audioOnly;
+      final selectedStream = audioStreams.isNotEmpty
+          ? audioStreams.withHighestBitrate()
+          : manifest.muxed.withHighestBitrate();
 
-      await _audioPlayer.setUrl(audioStream.url.toString());
+      await _audioPlayer.setUrl(selectedStream.url.toString());
       _audioPlayer.play();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Error playing this track")),
+          SnackBar(content: Text("Playback error: $e")),
         );
       }
     }
   }
 
-  // 1. Trending Screen
+  // Format Duration for Seekbar (MM:SS)
+  String _formatDuration(Duration d) {
+    final minutes = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final seconds = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return "$minutes:$seconds";
+  }
+
+  // Full Spotify-like Player Screen (Bottom Sheet)
+  void _showFullPlayer() {
+    if (_currentImage.isEmpty) return;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF181818),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) {
+          return StreamBuilder<Duration>(
+            stream: _audioPlayer.positionStream,
+            builder: (context, snapshot) {
+              final currentPos = snapshot.data ?? _position;
+              return Container(
+                height: MediaQuery.of(context).size.height * 0.92,
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                child: Column(
+                  children: [
+                    // Pull down bar
+                    Container(
+                      width: 40,
+                      height: 5,
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade600,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.keyboard_arrow_down, color: Colors.white, size: 30),
+                          onPressed: () => Navigator.pop(context),
+                        ),
+                        const Text("PLAYING FROM YOUR APP", style: TextStyle(color: Colors.grey, fontSize: 11, letterSpacing: 1.2)),
+                        const Icon(Icons.more_vert, color: Colors.white),
+                      ],
+                    ),
+                    const Spacer(),
+                    // Album Poster
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(16),
+                      child: Image.network(
+                        _currentImage,
+                        height: 280,
+                        width: 280,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => Container(
+                          height: 280,
+                          width: 280,
+                          color: Colors.grey.shade900,
+                          child: const Icon(Icons.music_note, color: Colors.green, size: 80),
+                        ),
+                      ),
+                    ),
+                    const Spacer(),
+                    // Title & Artist
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        _currentTitle,
+                        style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        _currentArtist,
+                        style: const TextStyle(color: Colors.grey, fontSize: 15),
+                        maxLines: 1,
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    // Progress Slider
+                    SliderTheme(
+                      data: SliderTheme.of(context).copyWith(
+                        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                        trackHeight: 3,
+                        activeTrackColor: Colors.green,
+                        inactiveTrackColor: Colors.grey.shade800,
+                        thumbColor: Colors.white,
+                      ),
+                      child: Slider(
+                        min: 0,
+                        max: _duration.inSeconds.toDouble() > 0 ? _duration.inSeconds.toDouble() : 1.0,
+                        value: currentPos.inSeconds.toDouble().clamp(0.0, _duration.inSeconds.toDouble() > 0 ? _duration.inSeconds.toDouble() : 1.0),
+                        onChanged: (val) {
+                          _audioPlayer.seek(Duration(seconds: val.toInt()));
+                        },
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(_formatDuration(currentPos), style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                          Text(_formatDuration(_duration), style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    // Playback Controls
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.replay_10, color: Colors.white, size: 32),
+                          onPressed: () {
+                            _audioPlayer.seek(currentPos - const Duration(seconds: 10));
+                          },
+                        ),
+                        IconButton(
+                          iconSize: 72,
+                          color: Colors.green,
+                          icon: Icon(_isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled),
+                          onPressed: () {
+                            if (_isPlaying) {
+                              _audioPlayer.pause();
+                            } else {
+                              _audioPlayer.play();
+                            }
+                            setModalState(() {});
+                          },
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.forward_10, color: Colors.white, size: 32),
+                          onPressed: () {
+                            _audioPlayer.seek(currentPos + const Duration(seconds: 10));
+                          },
+                        ),
+                      ],
+                    ),
+                    const Spacer(),
+                  ],
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+
+  // 1. Trending Tab Screen
   Widget _buildTrendingPage() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -205,7 +379,7 @@ class _MusicAppState extends State<MusicApp> {
     );
   }
 
-  // 2. Search Screen
+  // 2. Search Tab Screen
   Widget _buildSearchPage() {
     return Column(
       children: [
@@ -217,7 +391,7 @@ class _MusicAppState extends State<MusicApp> {
             textInputAction: TextInputAction.search,
             onSubmitted: (val) => searchSongs(val),
             decoration: InputDecoration(
-              hintText: 'Search any song, remix, artist...',
+              hintText: 'Search songs, artists, mashups...',
               hintStyle: const TextStyle(color: Colors.grey),
               filled: true,
               fillColor: const Color(0xFF222222),
@@ -267,7 +441,7 @@ class _MusicAppState extends State<MusicApp> {
     );
   }
 
-  // 3. Settings Screen
+  // 3. Settings Tab Screen
   Widget _buildSettingsPage() {
     return ListView(
       padding: const EdgeInsets.all(16.0),
@@ -307,8 +481,21 @@ class _MusicAppState extends State<MusicApp> {
           tileColor: const Color(0xFF1E1E1E),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           leading: const Icon(Icons.high_quality, color: Colors.green),
-          title: const Text("Audio Engine", style: TextStyle(color: Colors.white)),
-          subtitle: const Text("YouTube Direct Stream Engine", style: TextStyle(color: Colors.grey)),
+          title: const Text("Audio Quality", style: TextStyle(color: Colors.white)),
+          subtitle: Text(_audioQuality, style: const TextStyle(color: Colors.grey)),
+          trailing: DropdownButton<String>(
+            dropdownColor: const Color(0xFF2A2A2A),
+            value: _audioQuality,
+            underline: const SizedBox(),
+            items: const [
+              DropdownMenuItem(value: "Low (96kbps)", child: Text("Low (96kbps)", style: TextStyle(color: Colors.white))),
+              DropdownMenuItem(value: "Normal (160kbps)", child: Text("Normal (160kbps)", style: TextStyle(color: Colors.white))),
+              DropdownMenuItem(value: "High (320kbps)", child: Text("High (320kbps)", style: TextStyle(color: Colors.white))),
+            ],
+            onChanged: (val) {
+              if (val != null) _savePreference('audio_quality', val);
+            },
+          ),
         ),
         const SizedBox(height: 12),
         ListTile(
@@ -330,12 +517,13 @@ class _MusicAppState extends State<MusicApp> {
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           leading: const Icon(Icons.info_outline, color: Colors.green),
           title: const Text("App Version", style: TextStyle(color: Colors.white)),
-          subtitle: const Text("v1.1.0 (YouTube Native)", style: TextStyle(color: Colors.grey)),
+          subtitle: const Text("v1.2.0 (Full Spotify Engine)", style: TextStyle(color: Colors.grey)),
         ),
       ],
     );
   }
 
+  // Profile Edit Dialog
   void _showEditProfileDialog() {
     final nameController = TextEditingController(text: _userName);
     final avatars = ["👑", "🎧", "🎸", "🎤", "🎵", "🦁", "🔥", "🚀"];
@@ -421,48 +609,51 @@ class _MusicAppState extends State<MusicApp> {
           children: [
             Expanded(child: pages[_currentIndex]),
 
-            // Mini Player Bar
-            Container(
-              height: 65,
-              decoration: const BoxDecoration(
-                color: Color(0xFF242424),
-                border: Border(top: BorderSide(color: Colors.black54)),
-              ),
-              child: Row(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.all(8.0),
-                    child: _currentImage.isNotEmpty
-                        ? ClipRRect(
-                            borderRadius: BorderRadius.circular(4),
-                            child: Image.network(_currentImage, width: 48, height: 48, fit: BoxFit.cover),
-                          )
-                        : const Icon(Icons.music_note, color: Colors.green, size: 40),
-                  ),
-                  Expanded(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(_currentTitle, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600), maxLines: 1),
-                        if (_currentArtist.isNotEmpty)
-                          Text(_currentArtist, style: const TextStyle(color: Colors.grey, fontSize: 12), maxLines: 1),
-                      ],
+            // Mini Player Bar (Tap to open full Spotify player)
+            GestureDetector(
+              onTap: _showFullPlayer,
+              child: Container(
+                height: 65,
+                decoration: const BoxDecoration(
+                  color: Color(0xFF242424),
+                  border: Border(top: BorderSide(color: Colors.black54)),
+                ),
+                child: Row(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.all(8.0),
+                      child: _currentImage.isNotEmpty
+                          ? ClipRRect(
+                              borderRadius: BorderRadius.circular(4),
+                              child: Image.network(_currentImage, width: 48, height: 48, fit: BoxFit.cover),
+                            )
+                          : const Icon(Icons.music_note, color: Colors.green, size: 40),
                     ),
-                  ),
-                  IconButton(
-                    icon: Icon(_isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled),
-                    color: Colors.green,
-                    iconSize: 38,
-                    onPressed: () {
-                      if (_isPlaying) {
-                        _audioPlayer.pause();
-                      } else {
-                        _audioPlayer.play();
-                      }
-                    },
-                  ),
-                ],
+                    Expanded(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(_currentTitle, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600), maxLines: 1),
+                          if (_currentArtist.isNotEmpty)
+                            Text(_currentArtist, style: const TextStyle(color: Colors.grey, fontSize: 12), maxLines: 1),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      icon: Icon(_isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled),
+                      color: Colors.green,
+                      iconSize: 38,
+                      onPressed: () {
+                        if (_isPlaying) {
+                          _audioPlayer.pause();
+                        } else {
+                          _audioPlayer.play();
+                        }
+                      },
+                    ),
+                  ],
+                ),
               ),
             ),
           ],
